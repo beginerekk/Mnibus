@@ -1,0 +1,15 @@
+{
+  "name": "kurnik-ui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev":   "vite --port 1420",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  }
+}
