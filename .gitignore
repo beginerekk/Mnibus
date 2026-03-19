@@ -2,18 +2,35 @@
 node_modules/
 npm-debug.log*
 yarn-error.log
+yarn-debug.log*
+package-lock.json      ← opcjonalnie, niektórzy commitują
 
 # Pliki budowania Electron/Web
 dist/
 build/
 out/
+.webpack/              ← ważne przy Electron
+
+# Electron specyficzne
+*.exe                  ← nigdy nie commituj binarek!
+*.dmg
+*.AppImage
+*.snap
 
 # Pliki systemowe
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Konfiguracje środowiska i lokalne
 .env
+.env.local
+.env.*.local
 .vscode/
 .idea/
 *.swp
+*.swo
+
+# Logi
+logs/
+*.log
