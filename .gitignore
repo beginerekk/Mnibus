@@ -1,0 +1,19 @@
+# Zależności Node.js
+node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Pliki budowania Electron/Web
+dist/
+build/
+out/
+
+# Pliki systemowe
+.DS_Store
+Thumbs.db
+
+# Konfiguracje środowiska i lokalne
+.env
+.vscode/
+.idea/
+*.swp
