@@ -49,16 +49,20 @@ UA = (
 # Każda ramka WS to JSON: {"i": [kod, ...], "s": ["string1", ...]}
 # Pole "i" (integers) zawiera kody liczbowe, "s" (strings) zawiera teksty.
 
-PING     = 1    # serwer pyta czy żyjemy → odpowiadamy {"i":[2]} (PONG)
-TABLES   = 71   # serwer wysyła listę stołów w pokoju
-JOIN_TAB = 72   # my wysyłamy żądanie dołączenia do stołu
-CHAT     = 81   # wysyłanie/odbieranie wiadomości czatu
+PING        = 1    # serwer pyta czy żyjemy → odpowiadamy {"i":[2]} (PONG)
+TABLES      = 71   # serwer wysyła listę stołów w pokoju
+JOIN_TAB    = 72   # my wysyłamy żądanie dołączenia do stołu
+CHAT        = 81   # wysyłanie/odbieranie wiadomości czatu
 
-# Zbiór kodów które ignorujemy (nie wyświetlamy, nie przetwarzamy).
-# set zamiast list → sprawdzanie "czy jest w zbiorze" działa w O(1).
-# Kody dotyczą m.in.: aktualizacji gracza (18,20,22-25,27-28), stanu pokoju
-# (30-32), informacji o grze (51), duplikatów JOIN (72,74), itp.
-IGNORE_CODES = {18, 20, 22, 23, 24, 25, 27, 28, 30, 31, 32,
+# Kod 22 = gracz dołączył do stołu w pokoju.
+# Format ramki: {"i":[22, id_stołu, ...], "s":["nick", ...]}
+# Wyciągnięty z IGNORE_CODES żeby bot mógł raportować dołączenia do launchera
+# który sprawdza white/blacklistę i reaguje odpowiednio.
+PLAYER_JOIN = 22
+
+# Kody które ignorujemy całkowicie (nie wyświetlamy, nie przetwarzamy).
+# Kod 22 (PLAYER_JOIN) celowo POMINIĘTY — obsługujemy go osobno w receive().
+IGNORE_CODES = {18, 20, 23, 24, 25, 27, 28, 30, 31, 32,
                 51, 70, 72, 74, 88, 90, 92}
 
 # Wartości domyślne — można nadpisać przez argumenty CLI (--game, --room)
@@ -433,6 +437,21 @@ async def connect_ws(game: str, room: str, ge: str, ap: str,
                                     print(f'JOINED {current_table}', flush=True)
                                 continue
 
+                            # ── PLAYER_JOIN (kod 22): gracz dołączył do stołu ──
+                            # Format ramki: {"i":[22, id_stołu, ...], "s":["nick", ...]}
+                            # i[1] = numer stołu do którego dołączył gracz
+                            # s[0] = nick gracza
+                            #
+                            # Bot raportuje to do launchera jako "PLAYER_JOIN <stół> <nick>".
+                            # Launcher sprawdza white/blacklistę i wysyła botowi /join 0
+                            # lub wiadomość przez stdin.
+                            if code == PLAYER_JOIN:
+                                if len(msg['i']) > 1 and msg['s']:
+                                    table_id = msg['i'][1]
+                                    nick     = msg['s'][0]
+                                    print(f'PLAYER_JOIN {table_id} {nick}', flush=True)
+                                continue
+
                             # ── Kody do zignorowania ──────────────────────────
                             if code in IGNORE_CODES:
                                 continue  # nie wyświetlaj, nie loguj
@@ -480,16 +499,67 @@ async def connect_ws(game: str, room: str, ge: str, ap: str,
                         # ── /join <id> — zmień stół BEZ restartu bota ─────────
                         if line.startswith('/join '):
                             try:
-                                tid = int(line[6:].strip())    # wyciągnij ID po '/join '
-                                current_table = tid             # zapamiętaj nowy stół
-                                await ws.send(encode([JOIN_TAB, tid]))   # wyślij do serwera
-                                print(f'JOINED {tid}', flush=True)       # potwierdź launcherowi
+                                tid = int(line[6:].strip())
+                                current_table = tid
+                                await ws.send(encode([JOIN_TAB, tid]))
+                                if tid == 0:
+                                    # /join 0 = wyjdź ze stołu (tryb obserwatora)
+                                    print('JOINED 0', flush=True)
+                                else:
+                                    print(f'JOINED {tid}', flush=True)
                             except ValueError:
                                 print('ERR nieprawidłowy numer stołu', flush=True)
 
                         # ── /table — zapytaj o aktualny stół ─────────────────
                         elif line == '/table':
                             print(f'CURRENT_TABLE {current_table}', flush=True)
+
+                        # ── /ext <id_stołu> <wiadomość> — wyślij na INNY stół ──
+                        # Pozwala wysłać wiadomość na dowolny stół bez zmiany
+                        # aktualnego stołu bota (current_table pozostaje bez zmian).
+                        #
+                        # FORMAT:  /ext 7 cześć wszystkim
+                        # EFEKT:   wiadomość "cześć wszystkim" trafia na stół 7,
+                        #          ale bot nadal "siedzi" przy swoim current_table.
+                        #
+                        # JAK DZIAŁA:
+                        #   Kurnik wymaga żeby bot był przy stole żeby wysłać CHAT (81).
+                        #   Obejście: chwilowo JOIN do target_table (bot opuszcza swój stół),
+                        #   wysyła wiadomość, potem wraca JOIN z powrotem na current_table.
+                        #   Cały cykl trwa ~50ms — niezauważalne dla serwera.
+                        #
+                        # split(maxsplit=2) dzieli na max 3 części:
+                        #   "/ext 7 cześć wszystkim" → ['/ext', '7', 'cześć wszystkim']
+                        elif line.startswith('/ext '):
+                            czesci = line.split(maxsplit=2)
+                            # czesci[0] = '/ext'
+                            # czesci[1] = numer stołu docelowego (np. '7')
+                            # czesci[2] = treść wiadomości (np. 'cześć wszystkim')
+
+                            if len(czesci) == 3 and czesci[1].isdigit():
+                                target_table = int(czesci[1])
+                                message      = czesci[2]
+
+                                # KROK 1: dołącz do stołu docelowego
+                                await ws.send(encode([JOIN_TAB, target_table]))
+
+                                # KROK 2: krótka chwila żeby serwer zarejestrował JOIN
+                                # 0.05s = 50ms — wystarczy żeby serwer zdążył przetworzyć
+                                # Zbyt małe (0) → serwer może odrzucić CHAT bo JOIN jeszcze nie dotarł
+                                await asyncio.sleep(0.05)
+
+                                # KROK 3: wyślij wiadomość na stół docelowy
+                                await ws.send(encode([CHAT, target_table], [message]))
+
+                                # KROK 4: wróć na oryginalny stół (jeśli bot miał jakiś)
+                                if current_table:
+                                    await asyncio.sleep(0.05)
+                                    await ws.send(encode([JOIN_TAB, current_table]))
+                                    # current_table NIE zmienia się — bot wraca tam gdzie był
+
+                                print(f'EXT {target_table} {message}', flush=True)
+                            else:
+                                print('ERR użycie: /ext <id_stołu> <wiadomość>', flush=True)
 
                         # ── /quit lub /exit — zakończ gracefully ──────────────
                         elif line in ('/quit', '/exit'):
