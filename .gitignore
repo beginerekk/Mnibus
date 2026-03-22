@@ -34,3 +34,4 @@ desktop.ini
 # Logi
 logs/
 *.log
+/.vs
