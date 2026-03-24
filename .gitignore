@@ -35,3 +35,4 @@ desktop.ini
 logs/
 *.log
 /.vs
+/modules/kurniktelegram/__pycache__/bot_manager.cpython-314.pyc
